@@ -1,0 +1,312 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: taskforge-postgres
+    environment:
+      POSTGRES_USER: taskforge
+      POSTGRES_PASSWORD: taskforge_dev_password
+      POSTGRES_DB: taskforge_dev
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U taskforge" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    container_name: taskforge-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # RabbitMQ Message Queue
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: taskforge-rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: taskforge
+      RABBITMQ_DEFAULT_PASS: taskforge_dev_password
+    ports:
+      - "5672:5672" # AMQP
+      - "15672:15672" # Management UI
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: [ "CMD", "rabbitmq-diagnostics", "ping" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # MinIO (S3-compatible storage)
+  minio:
+    image: minio/minio:latest
+    container_name: taskforge-minio
+    environment:
+      MINIO_ROOT_USER: taskforge
+      MINIO_ROOT_PASSWORD: taskforge_dev_password
+    ports:
+      - "9000:9000" # API
+      - "9001:9001" # Console
+    volumes:
+      - minio_data:/data
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:9000/minio/health/live" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Elasticsearch (for search)
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0
+    container_name: taskforge-elasticsearch
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    ports:
+      - "9200:9200"
+    volumes:
+      - elasticsearch_data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: [ "CMD-SHELL", "curl -f http://localhost:9200/_cluster/health || exit 1" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # API Gateway
+  api-gateway:
+    build:
+      context: .
+      dockerfile: ./services/api-gateway/Dockerfile
+    container_name: taskforge-api-gateway
+    environment:
+      - NODE_ENV=development
+      - PORT=4000
+      - DATABASE_URL=postgresql://taskforge:taskforge_dev_password@postgres:5432/taskforge_dev
+      - REDIS_URL=redis://redis:6379
+      - JWT_SECRET=dev_jwt_secret_change_in_production
+      - JWT_REFRESH_SECRET=dev_jwt_refresh_secret_change_in_production
+    ports:
+      - "4000:4000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./services/api-gateway:/app
+      - /app/node_modules
+    command: npm run dev
+
+  # Auth Service
+  auth-service:
+    build:
+      context: .
+      dockerfile: ./services/auth-service/Dockerfile
+    container_name: taskforge-auth-service
+    environment:
+      - NODE_ENV=development
+      - PORT=5001
+      - DATABASE_URL=postgresql://taskforge:taskforge_dev_password@postgres:5432/taskforge_dev
+      - REDIS_URL=redis://redis:6379
+      - JWT_SECRET=dev_jwt_secret_change_in_production
+      - JWT_REFRESH_SECRET=dev_jwt_refresh_secret_change_in_production
+    ports:
+      - "5001:5001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./services/auth-service:/app
+      - /app/node_modules
+    command: npm run dev
+
+  # Project Service
+  project-service:
+    build:
+      context: .
+      dockerfile: ./services/project-service/Dockerfile
+    container_name: taskforge-project-service
+    environment:
+      - NODE_ENV=development
+      - PORT=5002
+      - DATABASE_URL=postgresql://taskforge:taskforge_dev_password@postgres:5432/taskforge_dev
+      - REDIS_URL=redis://redis:6379
+    ports:
+      - "5002:5002"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./services/project-service:/app
+      - /app/node_modules
+    command: npm run dev
+
+  # Task Service
+  task-service:
+    build:
+      context: .
+      dockerfile: ./services/task-service/Dockerfile
+    container_name: taskforge-task-service
+    environment:
+      - NODE_ENV=development
+      - PORT=5003
+      - DATABASE_URL=postgresql://taskforge:taskforge_dev_password@postgres:5432/taskforge_dev
+      - REDIS_URL=redis://redis:6379
+      - ELASTICSEARCH_URL=http://elasticsearch:9200
+    ports:
+      - "5003:5003"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+    volumes:
+      - ./services/task-service:/app
+      - /app/node_modules
+    command: npm run dev
+
+  # AI Service (Python)
+  ai-service:
+    build:
+      context: .
+      dockerfile: ./services/ai-service/Dockerfile
+    container_name: taskforge-ai-service
+    environment:
+      - ENVIRONMENT=development
+      - PORT=8000
+      - DATABASE_URL=postgresql://taskforge:taskforge_dev_password@postgres:5432/taskforge_dev
+      - REDIS_URL=redis://redis:6379
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - PINECONE_API_KEY=${PINECONE_API_KEY}
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./services/ai-service:/app
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+
+  # Collaboration Service (WebSocket)
+  collaboration-service:
+    build:
+      context: .
+      dockerfile: ./services/collaboration-service/Dockerfile
+    container_name: taskforge-collaboration-service
+    environment:
+      - NODE_ENV=development
+      - PORT=5004
+      - REDIS_URL=redis://redis:6379
+      - JWT_SECRET=dev_jwt_secret_change_in_production
+    ports:
+      - "5004:5004"
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./services/collaboration-service:/app
+      - /app/node_modules
+    command: npm run dev
+
+  # Notification Service
+  notification-service:
+    build:
+      context: .
+      dockerfile: ./services/notification-service/Dockerfile
+    container_name: taskforge-notification-service
+    environment:
+      - NODE_ENV=development
+      - PORT=5007
+      - DATABASE_URL=postgresql://taskforge:taskforge_dev_password@postgres:5432/taskforge_dev
+      - REDIS_URL=redis://redis:6379
+    ports:
+      - "5007:5007"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./services/notification-service:/app
+      - /app/node_modules
+    command: npm run dev
+
+  # Analytics Service
+  analytics-service:
+    build:
+      context: .
+      dockerfile: ./services/analytics-service/Dockerfile
+    container_name: taskforge-analytics-service
+    environment:
+      - NODE_ENV=development
+      - PORT=5005
+      - DATABASE_URL=postgresql://taskforge:taskforge_dev_password@postgres:5432/taskforge_dev
+      - REDIS_URL=redis://redis:6379
+    ports:
+      - "5005:5005"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./services/analytics-service:/app
+      - /app/node_modules
+    command: npm run dev
+
+  # Web Frontend (Next.js)
+  web:
+    build:
+      context: .
+      dockerfile: ./apps/web/Dockerfile
+    container_name: taskforge-web
+    environment:
+      - NODE_ENV=development
+      - NEXT_PUBLIC_API_URL=http://localhost:4000
+      - NEXT_PUBLIC_WS_URL=http://localhost:5004
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api-gateway
+    volumes:
+      - ./apps/web:/app
+      - /app/node_modules
+      - /app/.next
+    command: npm run dev
+
+volumes:
+  postgres_data:
+  redis_data:
+  rabbitmq_data:
+  minio_data:
+  elasticsearch_data:
+
+
+networks:
+  default:
+    name: taskforge-network

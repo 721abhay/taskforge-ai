@@ -1,0 +1,27 @@
+{
+    "name": "@taskforge/database",
+    "version": "0.1.0",
+    "private": true,
+    "description": "Database package with Prisma ORM for TaskForge AI",
+    "main": "dist/index.js",
+    "types": "dist/index.d.ts",
+    "scripts": {
+        "generate": "prisma generate",
+        "migrate": "prisma migrate dev",
+        "migrate:deploy": "prisma migrate deploy",
+        "migrate:reset": "prisma migrate reset",
+        "studio": "prisma studio",
+        "seed": "tsx prisma/seed.ts",
+        "build": "tsc",
+        "format": "prisma format"
+    },
+    "dependencies": {
+        "@prisma/client": "^5.7.1"
+    },
+    "devDependencies": {
+        "prisma": "^5.7.1",
+        "typescript": "^5.3.0",
+        "tsx": "^4.7.0",
+        "@types/node": "^20.10.0"
+    }
+}
